@@ -1,0 +1,135 @@
+{
+  "test_id": "TC-003",
+  "test_name": "LangGraph Infrastructure",
+  "timestamp": "2025-07-23T23:18:18.705950",
+  "status": "COMPLETED",
+  "sub_tests": {
+    "agent_imports": {
+      "status": "FAIL",
+      "importable_modules": [],
+      "failed_imports": [
+        "agent",
+        "agent.graph",
+        "agent.state",
+        "agent.nodes",
+        "agent.integration"
+      ],
+      "error_messages": {
+        "agent": "No module named 'agent'",
+        "agent.graph": "No module named 'agent'",
+        "agent.state": "No module named 'agent'",
+        "agent.nodes": "No module named 'agent'",
+        "agent.integration": "No module named 'agent'"
+      },
+      "import_rate": 0.0
+    },
+    "node_loading": {
+      "status": "PARTIAL",
+      "available_nodes": [
+        "cypher",
+        "hybrid",
+        "planner",
+        "rag",
+        "synthesizer",
+        "validator"
+      ],
+      "missing_nodes": [
+        "router",
+        "master_synthesis",
+        "parallel_processor"
+      ],
+      "node_details": {
+        "cypher": {
+          "exists": true,
+          "has_function": true,
+          "has_async": false,
+          "has_import": true,
+          "file_size": 7823
+        },
+        "hybrid": {
+          "exists": true,
+          "has_function": true,
+          "has_async": false,
+          "has_import": true,
+          "file_size": 11232
+        },
+        "planner": {
+          "exists": true,
+          "has_function": true,
+          "has_async": false,
+          "has_import": true,
+          "file_size": 8583
+        },
+        "rag": {
+          "exists": true,
+          "has_function": true,
+          "has_async": false,
+          "has_import": true,
+          "file_size": 12309
+        },
+        "router": {
+          "exists": false
+        },
+        "synthesizer": {
+          "exists": true,
+          "has_function": true,
+          "has_async": false,
+          "has_import": true,
+          "file_size": 8575
+        },
+        "validator": {
+          "exists": true,
+          "has_function": true,
+          "has_async": false,
+          "has_import": true,
+          "file_size": 10809
+        },
+        "master_synthesis": {
+          "exists": false
+        },
+        "parallel_processor": {
+          "exists": false
+        }
+      },
+      "availability_rate": 66.66666666666666
+    },
+    "agent_state": {
+      "status": "FAIL",
+      "state_importable": false,
+      "state_creatable": false,
+      "error_message": "Cannot import AgentState: No module named 'agent'"
+    },
+    "graph_compilation": {
+      "status": "FAIL",
+      "build_graph_available": false,
+      "graph_compilable": false,
+      "error_message": "Cannot import build_graph: No module named 'agent'"
+    },
+    "single_topic_graph": {
+      "status": "FAIL",
+      "single_graph_available": false,
+      "single_graph_compilable": false,
+      "error_message": "Cannot import build_single_topic_graph: No module named 'agent'"
+    },
+    "enhanced_integration": {
+      "status": "FAIL",
+      "integration_importable": false,
+      "enhanced_retrieval_available": false,
+      "error_message": "Cannot import integration module: No module named 'agent'"
+    },
+    "routing_logic": {
+      "status": "FAIL",
+      "router_available": false,
+      "routing_functions_found": false,
+      "error_message": "Router file not found"
+    }
+  },
+  "overall_result": "PARTIAL",
+  "summary": {
+    "total_sub_tests": 7,
+    "passed_sub_tests": 0,
+    "partial_sub_tests": 1,
+    "failed_sub_tests": 6,
+    "success_rate": 7.142857142857142
+  }
+}

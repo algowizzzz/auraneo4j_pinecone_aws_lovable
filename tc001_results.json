@@ -1,0 +1,91 @@
+{
+  "test_id": "TC-001",
+  "test_name": "Environment & Dependencies Setup",
+  "timestamp": "2025-07-23T23:15:11.111841",
+  "status": "COMPLETED",
+  "sub_tests": {
+    "environment_variables": {
+      "status": "FAIL",
+      "env_file_exists": true,
+      "present_variables": [],
+      "missing_variables": [
+        "OPENAI_API_KEY",
+        "NEO4J_URI",
+        "NEO4J_USERNAME",
+        "NEO4J_PASSWORD",
+        "PINECONE_API_KEY",
+        "PINECONE_ENVIRONMENT"
+      ],
+      "total_required": 6,
+      "total_present": 0
+    },
+    "dependencies": {
+      "status": "FAIL",
+      "requirements_file_exists": true,
+      "installed_packages": [],
+      "missing_packages": [
+        "langchain",
+        "langgraph",
+        "neo4j",
+        "pinecone-client",
+        "openai",
+        "pandas",
+        "numpy",
+        "faiss-cpu",
+        "sentence-transformers"
+      ],
+      "total_required": 9,
+      "total_installed": 0
+    },
+    "neo4j_connectivity": {
+      "status": "FAIL",
+      "connection_successful": false,
+      "error_message": "neo4j package not installed",
+      "database_accessible": false
+    },
+    "pinecone_connectivity": {
+      "status": "FAIL",
+      "api_key_valid": false,
+      "connection_successful": false,
+      "error_message": "pinecone-client package not installed"
+    },
+    "openai_connectivity": {
+      "status": "FAIL",
+      "api_key_valid": false,
+      "connection_successful": false,
+      "error_message": "openai package not installed"
+    },
+    "directory_structure": {
+      "status": "PASS",
+      "existing_directories": [
+        "agent",
+        "agent/nodes",
+        "agent/integration",
+        "data_pipeline",
+        "tests",
+        "zion_10k_md&a_chunked"
+      ],
+      "missing_directories": [],
+      "existing_files": [
+        "main.py",
+        "requirements.txt",
+        "agent/__init__.py",
+        "agent/graph.py",
+        "agent/state.py",
+        "data_pipeline/__init__.py"
+      ],
+      "missing_files": [],
+      "json_data_files_count": 155,
+      "expected_data_files": "125+",
+      "directory_structure_complete": true,
+      "required_files_present": true
+    }
+  },
+  "overall_result": "PARTIAL",
+  "summary": {
+    "total_sub_tests": 6,
+    "passed_sub_tests": 1,
+    "failed_sub_tests": 5,
+    "success_rate": 16.666666666666664
+  }
+}

@@ -1,0 +1,232 @@
+{
+  "test_id": "TC-002",
+  "test_name": "Data Pipeline Components",
+  "timestamp": "2025-07-23T23:16:45.209224",
+  "status": "COMPLETED",
+  "sub_tests": {
+    "json_validation": {
+      "status": "PASS",
+      "total_files": 155,
+      "valid_files": 155,
+      "invalid_files": 0,
+      "validation_rate": 100.0,
+      "sample_files": [
+        {
+          "filename": "external_SEC_PB_10-K_2022_q1_Item1.business.json",
+          "size_bytes": 85286,
+          "has_content": true,
+          "is_valid": true
+        },
+        {
+          "filename": "external_SEC_MTB_10-K_2025_q1_Item1.business..json",
+          "size_bytes": 85548,
+          "has_content": true,
+          "is_valid": true
+        },
+        {
+          "filename": "external_SEC_KEY_10-K_2021_q1_Item1.Business_part_2.json",
+          "size_bytes": 1874,
+          "has_content": true,
+          "is_valid": true
+        },
+        {
+          "filename": "external_SEC_CMA_10-K_2022_q1_Item1.Business..json",
+          "size_bytes": 72048,
+          "has_content": true,
+          "is_valid": true
+        },
+        {
+          "filename": "external_SEC_CFR_10-K_2023_q1_Item1.Business.json",
+          "size_bytes": 79055,
+          "has_content": true,
+          "is_valid": true
+        }
+      ],
+      "file_size_stats": {
+        "min_size": 1065,
+        "max_size": 109993,
+        "avg_size": 52438.92258064516
+      }
+    },
+    "enhanced_graph_schema": {
+      "status": "FAIL",
+      "schema_file_exists": true,
+      "schema_loadable": false,
+      "error_message": "Failed to import schema module: No module named 'neo4j'"
+    },
+    "data_pipeline_modules": {
+      "status": "PASS",
+      "total_required": 10,
+      "existing_modules": [
+        "build_faiss_index.py",
+        "chunker.py",
+        "create_graph_v3.py",
+        "create_graph_v4.py",
+        "create_graph_v5_integrated.py",
+        "data_validator.py",
+        "enhanced_graph_schema.py",
+        "extract_embeddings.py",
+        "pinecone_integration.py",
+        "search_engine.py"
+      ],
+      "missing_modules": [],
+      "availability_rate": 100.0,
+      "module_details": [
+        {
+          "name": "build_faiss_index.py",
+          "exists": true,
+          "size_bytes": 2555,
+          "is_executable": false
+        },
+        {
+          "name": "chunker.py",
+          "exists": true,
+          "size_bytes": 2737,
+          "is_executable": false
+        },
+        {
+          "name": "create_graph_v3.py",
+          "exists": true,
+          "size_bytes": 8321,
+          "is_executable": false
+        },
+        {
+          "name": "create_graph_v4.py",
+          "exists": true,
+          "size_bytes": 17739,
+          "is_executable": false
+        },
+        {
+          "name": "create_graph_v5_integrated.py",
+          "exists": true,
+          "size_bytes": 21843,
+          "is_executable": false
+        },
+        {
+          "name": "data_validator.py",
+          "exists": true,
+          "size_bytes": 16817,
+          "is_executable": false
+        },
+        {
+          "name": "enhanced_graph_schema.py",
+          "exists": true,
+          "size_bytes": 21302,
+          "is_executable": false
+        },
+        {
+          "name": "extract_embeddings.py",
+          "exists": true,
+          "size_bytes": 1686,
+          "is_executable": false
+        },
+        {
+          "name": "pinecone_integration.py",
+          "exists": true,
+          "size_bytes": 8858,
+          "is_executable": false
+        },
+        {
+          "name": "search_engine.py",
+          "exists": true,
+          "size_bytes": 18962,
+          "is_executable": false
+        }
+      ]
+    },
+    "financial_entity_extraction": {
+      "status": "PASS",
+      "sample_text_processed": true,
+      "entities_extracted": true,
+      "error_message": null,
+      "entities_found": [
+        "capital ratio",
+        "tier 1",
+        "net interest income",
+        "credit loss",
+        "market risk",
+        "regulatory"
+      ]
+    },
+    "data_consistency": {
+      "status": "PASS",
+      "unique_companies": 12,
+      "companies_sample": [
+        "PNFP",
+        "CBSH",
+        "ZION",
+        "CFR",
+        "SSB",
+        "FITB",
+        "BPOP",
+        "KEY",
+        "PB",
+        "MTB"
+      ],
+      "unique_years": 5,
+      "years_range": [
+        "2021",
+        "2022",
+        "2023",
+        "2024",
+        "2025"
+      ],
+      "unique_quarters": 1,
+      "quarters_found": [
+        "q1"
+      ],
+      "sample_patterns": [
+        {
+          "filename": "external_SEC_PB_10-K_2022_q1_Item1.business.json",
+          "company": "PB",
+          "year": "2022",
+          "quarter": "q1"
+        },
+        {
+          "filename": "external_SEC_MTB_10-K_2025_q1_Item1.business..json",
+          "company": "MTB",
+          "year": "2025",
+          "quarter": "q1"
+        },
+        {
+          "filename": "external_SEC_KEY_10-K_2021_q1_Item1.Business_part_2.json",
+          "company": "KEY",
+          "year": "2021",
+          "quarter": "q1"
+        },
+        {
+          "filename": "external_SEC_CMA_10-K_2022_q1_Item1.Business..json",
+          "company": "CMA",
+          "year": "2022",
+          "quarter": "q1"
+        },
+        {
+          "filename": "external_SEC_CFR_10-K_2023_q1_Item1.Business.json",
+          "company": "CFR",
+          "year": "2023",
+          "quarter": "q1"
+        }
+      ],
+      "total_files_analyzed": 155
+    },
+    "integration_readiness": {
+      "status": "PASS",
+      "integration_files_present": [
+        "enhanced_retrieval.py",
+        "__init__.py"
+      ],
+      "integration_files_missing": [],
+      "main_file_exists": true,
+      "graph_file_exists": true,
+      "integration_readiness": true
+    }
+  },
+  "overall_result": "PARTIAL",
+  "summary": {
+    "total_sub_tests": 6,
+    "passed_sub_tests": 5,
+    "partial_sub_tests": 0,
+    "failed_sub_tests": 1,
+    "success_rate": 83.33333333333334
+  }
+}
