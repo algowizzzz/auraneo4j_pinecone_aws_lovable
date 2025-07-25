@@ -18,6 +18,13 @@ try:
 except ImportError:
     ENHANCED_ENTITY_EXTRACTION_AVAILABLE = False
 
+# Import company mapping system for normalization
+try:
+    from agent.utils.company_mapping import normalize_company
+    COMPANY_MAPPING_AVAILABLE = True
+except ImportError:
+    COMPANY_MAPPING_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 # Initialize LLM for planner decisions
@@ -46,35 +53,28 @@ Your job is ONLY to produce a valid JSON object with keys:
 5. Provide at most TWO fallback routes.
 6. Confidence is implicit in your routing order; do not add extra keys.
 
+**CRITICAL: Company Ticker Extraction**
+For the "company" field in metadata, ALWAYS use the standard NYSE/NASDAQ ticker symbol:
+- Wells Fargo → "WFC"
+- JPMorgan Chase → "JPM" 
+- Bank of America → "BAC"
+- Zions Bancorporation → "ZION"
+- KeyCorp → "KEY"
+- Truist → "TFC"
+- Bank of New York Mellon → "BK"
+- And other standard tickers (USB, MTB, RF, SNV, etc.)
+
+If you recognize a bank company name but don't know the exact ticker, use the most likely ticker abbreviation.
+
 Return ONLY valid JSON. Do NOT wrap in markdown.
 """
 
-def _extract_metadata(query: str) -> Dict[str, Any]:
+def _extract_basic_metadata(query: str) -> Dict[str, Any]:
     """
-    Extract metadata from query using regex patterns.
-    Looks for company names, years, quarters, and document types.
+    Extract basic metadata from query using simple regex patterns.
+    Company extraction is handled by LLM for better accuracy.
     """
     metadata = {}
-    
-    # Company patterns - expanded from readme example
-    company_patterns = [
-        r"\b(?:Bank\s+of\s+Montreal|BMO)\b",
-        r"\b(?:Bank\s+of\s+America|BAC)\b", 
-        r"\b(?:JPMorgan|JPM)\b",
-        r"\b(?:Wells\s+Fargo|WFC)\b",
-        r"\b(?:Zions?\s+Banc?corporation|ZION)\b",
-        r"\b(?:KeyCorp|KEY)\b",
-        r"\b(?:Truist|TFC)\b",
-        r"\b(?:Bank\s+of\s+New\s+York\s+Mellon|BK)\b",
-        # Add all companies from our dataset
-        r"\b(?:BOKF|BPOP|CBSH|CFG|CFR|CMA|EWBC|FCNCA|FHN|FITB|MTB|ONB|PB|PNFP|RF|SNV|SSB|UMBF|USB|WAL|WBS|WTFC)\b"
-    ]
-    
-    for pattern in company_patterns:
-        match = re.search(pattern, query, re.IGNORECASE)
-        if match:
-            metadata["company"] = match.group(0).upper()
-            break
     
     # Year pattern
     year_match = re.search(r"\b(20[2-3]\d)\b", query)
@@ -125,9 +125,9 @@ def planner(state: AgentState) -> AgentState:
         query = state["query_raw"]
         logger.info(f"Planning route for query: {query[:100]}...")
         
-        # Extract metadata using regex
-        meta_raw = _extract_metadata(query)
-        logger.debug(f"Extracted metadata: {meta_raw}")
+        # Extract basic metadata using regex (company handled by LLM)
+        meta_raw = _extract_basic_metadata(query)
+        logger.debug(f"Extracted basic metadata: {meta_raw}")
         
         # Extract financial entities if enhanced infrastructure is available
         financial_entities = {}
@@ -149,8 +149,9 @@ def planner(state: AgentState) -> AgentState:
             PLANNER_SYS
             + "\n\nUser query:\n"
             + query
-            + "\n\nExtracted metadata (may be partial):\n"
+            + "\n\nPartial metadata extracted:\n"
             + json.dumps(meta_raw, indent=2)
+            + "\n\nCOMPLETE THE METADATA: Extract the company ticker from the query and merge with the partial metadata above. If no company is mentioned, omit the company field."
             + enhanced_prompt_addition
         )
         
@@ -180,6 +181,17 @@ def planner(state: AgentState) -> AgentState:
         plan.setdefault("fallback", ["hybrid"])
         plan.setdefault("metadata", meta_raw)
         plan.setdefault("sub_tasks", [])
+        
+        # CRITICAL: Normalize company name using company mapping system
+        if COMPANY_MAPPING_AVAILABLE and plan["metadata"].get("company"):
+            raw_company = plan["metadata"]["company"]
+            normalized_company = normalize_company(raw_company)
+            
+            if normalized_company:
+                plan["metadata"]["company"] = normalized_company
+                logger.info(f"Normalized company: '{raw_company}' → '{normalized_company}'")
+            else:
+                logger.warning(f"Could not normalize company name: '{raw_company}'")
         
         # Update state with planning results
         state.update(plan)

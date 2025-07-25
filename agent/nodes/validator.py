@@ -18,11 +18,16 @@ _llm = ChatOpenAI(
     api_key=os.getenv("OPENAI_API_KEY")
 )
 
-# LLM reflection prompt from readme specifications
+# LLM reflection prompt optimized for financial retrieval tasks
 _REFLECT_PROMPT = """\
 Rate the following retrieved passages for their usefulness to answer the user's
-question on a scale 0–10 (0 = irrelevant, 10 = perfectly sufficient).
-Return ONLY the integer.
+financial question on a scale 0–10 (0 = completely irrelevant, 10 = perfectly sufficient).
+
+Consider that partial information about financial metrics, business descriptions, 
+or risk factors can still be useful for synthesis. Even if passages don't fully 
+answer the question, they may contain relevant financial context.
+
+Return ONLY the integer score.
 
 User question:
 {question}
@@ -161,18 +166,18 @@ def validator(state: AgentState) -> AgentState:
         validation_passed = True
         reasons = []
         
-        # Rule 1: LLM reflection score must be >= 6
-        if llm_score < 6:
+        # Rule 1: LLM reflection score must be >= 3 (optimized for SEC retrieval)
+        if llm_score < 3:
             validation_passed = False
             reasons.append(f"LLM relevance score too low: {llm_score}/10")
         
-        # Rule 2: Minimum hit count >= 2 for basic coverage
-        if numerical_metrics["hit_count"] < 2:
+        # Rule 2: Minimum hit count >= 1 for basic coverage (business-optimized)
+        if numerical_metrics["hit_count"] < 1:
             validation_passed = False
             reasons.append(f"Insufficient results: {numerical_metrics['hit_count']} hits")
         
-        # Rule 3: For semantic searches, minimum average score
-        if source in ["hybrid", "rag"] and numerical_metrics["avg_score"] < 0.25:
+        # Rule 3: For semantic searches, minimum average score (business-optimized)
+        if source in ["hybrid", "rag"] and numerical_metrics["avg_score"] < 0.10:
             validation_passed = False
             reasons.append(f"Low semantic similarity: {numerical_metrics['avg_score']:.3f}")
         

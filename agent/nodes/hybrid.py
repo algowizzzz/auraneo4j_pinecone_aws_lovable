@@ -1,77 +1,93 @@
 """
-Hybrid Node - Neo4j Filtering + Pinecone Vector Search
-Enhanced with Week 1 infrastructure for advanced financial entity relationships
+Hybrid Node - Neo4j Filtering + Pinecone Vector Search (FIXED VERSION)
+Enhanced with better temporal query handling and fallback mechanisms
 """
 
 from agent.state import AgentState, RetrievalHit
 from agent.nodes.cypher import Neo4jCypherRetriever
 import sys
 import os
+import logging
+from typing import List, Dict, Any
 
 # Add data_pipeline to path for imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../data_pipeline'))
 
 try:
     from pinecone_integration import PineconeVectorStore
+    PINECONE_AVAILABLE = True
 except ImportError:
     logger.warning("PineconeVectorStore not available - hybrid mode will fall back to Cypher only")
     PineconeVectorStore = None
-
-# Import enhanced retrieval capabilities
-try:
-    from agent.integration.enhanced_retrieval import get_enhanced_retriever
-    ENHANCED_RETRIEVAL_AVAILABLE = True
-except ImportError:
-    ENHANCED_RETRIEVAL_AVAILABLE = False
-
-import logging
-from typing import List, Dict, Any
+    PINECONE_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
-class HybridRetriever:
-    """Hybrid retrieval combining Neo4j metadata filtering with Pinecone semantic search"""
+class ImprovedHybridRetriever:
+    """Improved hybrid retrieval with better temporal query handling"""
     
     def __init__(self):
         self.neo4j_retriever = Neo4jCypherRetriever()
         self.pinecone_store = None
         
         # Initialize Pinecone if available
-        if PineconeVectorStore:
+        if PINECONE_AVAILABLE:
             try:
                 pinecone_index = os.getenv('PINECONE_INDEX_NAME', 'sec-rag-index') 
                 self.pinecone_store = PineconeVectorStore(index_name=pinecone_index)
-                logger.info("Hybrid retriever initialized with Pinecone")
+                logger.info("Improved hybrid retriever initialized with Pinecone")
             except Exception as e:
                 logger.warning(f"Failed to initialize Pinecone for hybrid: {e}")
                 self.pinecone_store = None
     
     def execute_hybrid_retrieval(self, query: str, metadata: Dict[str, Any], top_k: int = 15) -> List[RetrievalHit]:
         """
-        Execute hybrid retrieval:
-        1. Use metadata to filter relevant documents via Neo4j
-        2. Perform semantic search within filtered set via Pinecone
-        3. Merge and rank results
+        Execute improved hybrid retrieval with better temporal handling:
+        1. Check data availability for requested filters
+        2. Relax filters if no data found
+        3. Fall back gracefully to broader searches
         """
         try:
-            # Step 1: If we have Pinecone, use it with metadata filters
+            # Step 1: Try exact metadata match
             if self.pinecone_store and metadata:
-                logger.info("Executing Pinecone search with metadata filters")
-                return self._pinecone_filtered_search(query, metadata, top_k)
+                logger.info("Trying exact metadata match with Pinecone")
+                hits = self._pinecone_filtered_search(query, metadata, top_k)
+                
+                if hits:
+                    logger.info(f"Exact match found {len(hits)} results")
+                    return hits
+                
+                # Step 2: If no results, try relaxed temporal search
+                if metadata.get("company") and metadata.get("year"):
+                    logger.info("Exact match failed, trying relaxed temporal search")
+                    hits = self._relaxed_temporal_search(query, metadata, top_k)
+                    
+                    if hits:
+                        logger.info(f"Relaxed temporal search found {len(hits)} results")
+                        return hits
+                
+                # Step 3: Try company-only search
+                if metadata.get("company"):
+                    logger.info("Temporal search failed, trying company-only search")
+                    company_metadata = {"company": metadata["company"]}
+                    hits = self._pinecone_filtered_search(query, company_metadata, top_k)
+                    
+                    if hits:
+                        logger.info(f"Company-only search found {len(hits)} results")
+                        return hits
             
-            # Step 2: Fallback to Neo4j-only search with text matching
-            else:
-                logger.info("Falling back to Neo4j text matching")
-                return self._neo4j_text_search(query, metadata, top_k)
+            # Step 4: Final fallback to Neo4j text search
+            logger.info("All Pinecone searches failed, falling back to Neo4j")
+            return self._neo4j_fallback_search(query, metadata, top_k)
                 
         except Exception as e:
             logger.error(f"Hybrid retrieval failed: {e}")
             return []
     
     def _pinecone_filtered_search(self, query: str, metadata: Dict[str, Any], top_k: int) -> List[RetrievalHit]:
-        """Use Pinecone with metadata filtering"""
+        """Use Pinecone with metadata filtering - FIXED VERSION"""
         try:
-            # Build Pinecone filter dict
+            # Build Pinecone filter dict (use proper format for new API)
             filter_dict = {}
             
             if metadata.get("company"):
@@ -90,7 +106,7 @@ class HybridRetriever:
             pinecone_results = self.pinecone_store.similarity_search(
                 query=query,
                 top_k=top_k,
-                filter_dict=filter_dict
+                filter_dict=filter_dict if filter_dict else None
             )
             
             # Convert to RetrievalHit format
@@ -105,71 +121,138 @@ class HybridRetriever:
                 )
                 hits.append(hit)
             
-            logger.info(f"Pinecone hybrid search found {len(hits)} results")
+            logger.info(f"Pinecone filtered search found {len(hits)} results")
             return hits
             
         except Exception as e:
             logger.error(f"Pinecone filtered search failed: {e}")
             return []
     
-    def _neo4j_text_search(self, query: str, metadata: Dict[str, Any], top_k: int) -> List[RetrievalHit]:
-        """Fallback to Neo4j fulltext search when Pinecone unavailable"""
+    def _relaxed_temporal_search(self, query: str, metadata: Dict[str, Any], top_k: int) -> List[RetrievalHit]:
+        """Search with relaxed year constraints for temporal queries"""
+        try:
+            company = metadata.get("company")
+            target_year = int(metadata.get("year", 2024))
+            
+            # Try a range of years around the target
+            year_ranges = [
+                [target_year],  # Exact year
+                [target_year - 1, target_year, target_year + 1],  # ±1 year
+                [target_year - 2, target_year - 1, target_year, target_year + 1, target_year + 2],  # ±2 years
+            ]
+            
+            for year_range in year_ranges:
+                filter_dict = {
+                    "company": {"$eq": company},
+                    "year": {"$in": year_range}
+                }
+                
+                results = self.pinecone_store.similarity_search(
+                    query=query,
+                    top_k=top_k,
+                    filter_dict=filter_dict
+                )
+                
+                if results:
+                    logger.info(f"Found {len(results)} results for {company} in years {year_range}")
+                    
+                    # Convert to RetrievalHit format
+                    hits = []
+                    for result in results:
+                        hit = RetrievalHit(
+                            section_id=result.get('id', 'unknown'),
+                            text=result['metadata'].get('text', ''),
+                            score=float(result['score']),
+                            source="hybrid_temporal",
+                            metadata=result['metadata']
+                        )
+                        hits.append(hit)
+                    
+                    return hits
+            
+            logger.info(f"No results found for {company} in any year range")
+            return []
+            
+        except Exception as e:
+            logger.error(f"Relaxed temporal search failed: {e}")
+            return []
+    
+    def _neo4j_fallback_search(self, query: str, metadata: Dict[str, Any], top_k: int) -> List[RetrievalHit]:
+        """Enhanced Neo4j fallback with better company search"""
         try:
             driver = self.neo4j_retriever._get_driver()
             
-            # Build text search query
-            base_query = """
-            CALL db.index.fulltext.queryNodes('section_text_index', $search_text) 
-            YIELD node, score
-            MATCH (node)<-[:HAS_SECTION]-(d:Document)<-[:HAS_DOC]-(q:Quarter)<-[:HAS_QUARTER]-(y:Year)<-[:HAS_YEAR]-(c:Company)
-            """
-            
-            # Add metadata filters
-            conditions = []
-            params = {"search_text": query}
-            
+            # First try: Company-specific search without year constraints
             if metadata.get("company"):
-                conditions.append("c.name = $company")
-                params["company"] = metadata["company"]
+                company_query = """
+                MATCH (c:Company {name: $company})-[:HAS_YEAR]->(y:Year)-[:HAS_QUARTER]->(q:Quarter)
+                      -[:HAS_DOC]->(d:Document)-[:HAS_SECTION]->(s:Section)
+                WHERE s.text CONTAINS $search_term OR s.section CONTAINS $search_term
+                RETURN c.name as company, y.value as year, q.label as quarter, 
+                       d.document_type as doc_type, s.section as section_name,
+                       s.filename as section_id, s.text as text, 1.0 as score
+                ORDER BY y.value DESC
+                LIMIT $top_k
+                """
                 
-            if metadata.get("year"):
-                conditions.append("y.value = $year")
-                params["year"] = int(metadata["year"])
-                
-            if metadata.get("quarter"):
-                conditions.append("q.label = $quarter")
-                params["quarter"] = metadata["quarter"]
-                
-            if metadata.get("doc_type"):
-                conditions.append("d.document_type = $doc_type")
-                params["doc_type"] = metadata["doc_type"]
+                # Extract key terms from query for search
+                search_terms = ["business", "strategy", "operations", "evolution", "risk", "management"]
+                for term in search_terms:
+                    if term.lower() in query.lower():
+                        params = {
+                            "company": metadata["company"],
+                            "search_term": term,
+                            "top_k": top_k
+                        }
+                        
+                        with driver.session() as session:
+                            result = session.run(company_query, params)
+                            records = list(result)
+                            
+                            if records:
+                                hits = []
+                                for record in records:
+                                    hit = RetrievalHit(
+                                        section_id=record["section_id"],
+                                        text=record["text"] or "",
+                                        score=float(record["score"]),
+                                        source="hybrid_neo4j",
+                                        metadata={
+                                            "section_name": record["section_name"],
+                                            "company": record["company"],
+                                            "year": record["year"],
+                                            "quarter": record["quarter"],
+                                            "doc_type": record["doc_type"]
+                                        }
+                                    )
+                                    hits.append(hit)
+                                
+                                logger.info(f"Neo4j company search found {len(hits)} results for term '{term}'")
+                                return hits
             
-            where_clause = ""
-            if conditions:
-                where_clause = "WHERE " + " AND ".join(conditions)
-            
-            return_clause = f"""
-            {where_clause}
+            # Final fallback: Basic text search
+            basic_query = """
+            MATCH (c:Company)-[:HAS_YEAR]->(y:Year)-[:HAS_QUARTER]->(q:Quarter)
+                  -[:HAS_DOC]->(d:Document)-[:HAS_SECTION]->(s:Section)
+            WHERE s.text CONTAINS 'business' OR s.text CONTAINS 'strategy'
             RETURN c.name as company, y.value as year, q.label as quarter, 
-                   d.document_type as doc_type, node.section as section_name,
-                   node.filename as section_id, node.text as text, score
-            ORDER BY score DESC
+                   d.document_type as doc_type, s.section as section_name,
+                   s.filename as section_id, s.text as text, 0.5 as score
+            ORDER BY y.value DESC
             LIMIT $top_k
             """
             
-            full_query = f"{base_query} {return_clause}"
-            params["top_k"] = top_k
-            
             with driver.session() as session:
-                result = session.run(full_query, params)
+                result = session.run(basic_query, {"top_k": top_k})
+                records = list(result)
                 
                 hits = []
-                for record in result:
+                for record in records:
                     hit = RetrievalHit(
                         section_id=record["section_id"],
                         text=record["text"] or "",
                         score=float(record["score"]),
-                        source="hybrid",
+                        source="hybrid_fallback",
                         metadata={
                             "section_name": record["section_name"],
                             "company": record["company"],
@@ -180,62 +263,28 @@ class HybridRetriever:
                     )
                     hits.append(hit)
                 
-                logger.info(f"Neo4j text search found {len(hits)} results")
+                logger.info(f"Neo4j fallback search found {len(hits)} results")
                 return hits
                 
         except Exception as e:
-            logger.error(f"Neo4j text search failed: {e}")
+            logger.error(f"Neo4j fallback search failed: {e}")
             return []
 
 # Global retriever instance
-_hybrid_retriever = HybridRetriever()
+_improved_hybrid_retriever = ImprovedHybridRetriever()
 
 def hybrid(state: AgentState) -> AgentState:
     """
-    Hybrid retrieval node - enhanced metadata filtering with semantic search
-    Enhanced with Week 1 infrastructure for financial entity relationships and advanced filtering
-    
-    Best for: Queries with some metadata but requiring explanation/summary
+    IMPROVED Hybrid retrieval node - better temporal query handling
     """
     try:
         query = state.get("query_raw", "")
         metadata = state.get("metadata", {})
         
-        logger.info(f"Hybrid node processing query: '{query[:50]}...' with metadata: {metadata}")
+        logger.info(f"IMPROVED Hybrid node processing: '{query[:50]}...' with metadata: {metadata}")
         
-        # Try enhanced retrieval first if available
-        hits = []
-        if ENHANCED_RETRIEVAL_AVAILABLE:
-            try:
-                enhanced_retriever = get_enhanced_retriever()
-                
-                # Use enhanced Pinecone search which combines metadata filtering with entity extraction
-                hits = enhanced_retriever.enhanced_pinecone_search(
-                    query=query,
-                    metadata=metadata,
-                    top_k=15
-                )
-                logger.info(f"Enhanced hybrid search returned {len(hits)} hits")
-                
-                # If we have a company and year range, also try temporal analysis
-                if metadata.get("company") and not hits:
-                    temporal_hits = enhanced_retriever.temporal_competitive_search(
-                        query=query,
-                        company=metadata["company"],
-                        timeframe_years=[2021, 2022, 2023, 2024, 2025],
-                        include_competitors=False,  # Focus on company history
-                        top_k=10
-                    )
-                    hits.extend(temporal_hits)
-                    logger.info(f"Added {len(temporal_hits)} temporal analysis hits")
-                    
-            except Exception as e:
-                logger.warning(f"Enhanced hybrid retrieval failed, falling back to standard: {e}")
-        
-        # Fallback to standard retrieval if enhanced failed or unavailable
-        if not hits:
-            hits = _hybrid_retriever.execute_hybrid_retrieval(query, metadata, top_k=15)
-            logger.info(f"Standard hybrid search returned {len(hits)} hits")
+        # Use improved hybrid retrieval
+        hits = _improved_hybrid_retriever.execute_hybrid_retrieval(query, metadata, top_k=15)
         
         # Update state
         state["retrievals"] = hits
@@ -243,21 +292,20 @@ def hybrid(state: AgentState) -> AgentState:
         # Track tool usage and confidence
         if "tools_used" not in state:
             state["tools_used"] = []
-        state["tools_used"].append("hybrid")
+        state["tools_used"].append("hybrid_improved")
         
         if "confidence_scores" not in state:
             state["confidence_scores"] = {}
         
-        # Enhanced confidence calculation
+        # Calculate confidence based on results
         if hits:
             avg_score = sum(hit["score"] for hit in hits) / len(hits)
-            base_confidence = min(1.0, avg_score * (len(hits) / 10))  # Normalize
+            base_confidence = min(1.0, avg_score * (len(hits) / 10))
             
-            # Boost confidence for enhanced retrieval modes
-            enhanced_sources = ["enhanced_pinecone", "temporal_analysis"]
-            if any(hit.get("source", "") in enhanced_sources for hit in hits):
-                enhanced_confidence = min(1.0, base_confidence * 1.15)  # Higher boost for hybrid
-                confidence = enhanced_confidence
+            # Boost confidence for successful temporal searches
+            temporal_sources = ["hybrid_temporal", "hybrid_neo4j"]
+            if any(hit.get("source", "") in temporal_sources for hit in hits):
+                confidence = min(1.0, base_confidence * 1.2)
             else:
                 confidence = base_confidence
         else:
@@ -265,10 +313,10 @@ def hybrid(state: AgentState) -> AgentState:
             
         state["confidence_scores"]["hybrid"] = confidence
         
-        logger.info(f"Hybrid node completed: {len(hits)} hits, confidence: {confidence:.2f}")
+        logger.info(f"IMPROVED Hybrid node completed: {len(hits)} hits, confidence: {confidence:.2f}")
         
     except Exception as e:
-        logger.error(f"Hybrid node error: {e}")
+        logger.error(f"IMPROVED Hybrid node error: {e}")
         state["retrievals"] = []
         if "error_messages" not in state:
             state["error_messages"] = []

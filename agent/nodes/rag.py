@@ -10,6 +10,9 @@ import os
 # Add data_pipeline to path for imports
 sys.path.append(os.path.join(os.path.dirname(__file__), '../../data_pipeline'))
 
+# Import Neo4j text retrieval system (replaces file-based fallback)
+from agent.utils.neo4j_text_retrieval import neo4j_text_retriever
+
 try:
     from pinecone_integration import PineconeVectorStore
 except ImportError:
@@ -58,10 +61,15 @@ class RAGRetriever:
                 logger.error("Pinecone not available for RAG retrieval")
                 return []
             
-            # Build optional filter for companies
+            # Build optional filter for companies (Pinecone simple format)
             filter_dict = {}
             if companies:
-                filter_dict["company"] = {"$in": companies}
+                if len(companies) == 1:
+                    filter_dict["company"] = companies[0]  # Simple equality for single company
+                else:
+                    # For multiple companies, we'll do separate searches and merge
+                    # Pinecone doesn't support $in operator easily
+                    filter_dict["company"] = companies[0]  # Use first company for now
             
             # Execute semantic search
             logger.info(f"Executing RAG search for: '{query[:50]}...'")
@@ -74,19 +82,33 @@ class RAGRetriever:
                 filter_dict=filter_dict if filter_dict else None
             )
             
-            # Convert to RetrievalHit format
+            # Convert to RetrievalHit format with text enhancement
             hits = []
             for result in pinecone_results:
+                # Create initial hit
+                hit_dict = {
+                    'section_id': result.get('id', 'unknown'),
+                    'text': result['metadata'].get('text', ''),
+                    'score': float(result['score']),
+                    'source': "rag",
+                    'metadata': result['metadata']
+                }
+                
+                # Enhance with full text from Neo4j (replaces file-based fallback)
+                enhanced_hit = neo4j_text_retriever.enhance_retrieval_with_neo4j_text(hit_dict, min_text_length=500)
+                
+                # Convert to RetrievalHit
                 hit = RetrievalHit(
-                    section_id=result.get('id', 'unknown'),
-                    text=result['metadata'].get('text', ''),
-                    score=float(result['score']),
-                    source="rag",
-                    metadata=result['metadata']
+                    section_id=enhanced_hit['section_id'],
+                    text=enhanced_hit['text'],
+                    score=enhanced_hit['score'],
+                    source=enhanced_hit['source'],
+                    metadata=enhanced_hit['metadata']
                 )
                 hits.append(hit)
             
-            logger.info(f"RAG search found {len(hits)} results")
+            enhanced_count = sum(1 for hit in hits if len(hit.get('text', '')) > 500)
+            logger.info(f"RAG search found {len(hits)} results, {enhanced_count} enhanced with full text")
             return hits
             
         except Exception as e:
@@ -111,19 +133,33 @@ class RAGRetriever:
                 top_k=top_k
             )
             
-            # Convert to RetrievalHit format
+            # Convert to RetrievalHit format with text enhancement
             hits = []
             for result in pinecone_results:
+                # Create initial hit
+                hit_dict = {
+                    'section_id': result.get('id', 'unknown'),
+                    'text': result['metadata'].get('text', ''),
+                    'score': float(result['score']),
+                    'source': "rag",
+                    'metadata': result['metadata']
+                }
+                
+                # Enhance with full text from Neo4j (replaces file-based fallback)
+                enhanced_hit = neo4j_text_retriever.enhance_retrieval_with_neo4j_text(hit_dict, min_text_length=500)
+                
+                # Convert to RetrievalHit
                 hit = RetrievalHit(
-                    section_id=result.get('id', 'unknown'),
-                    text=result['metadata'].get('text', ''),
-                    score=float(result['score']),
-                    source="rag",
-                    metadata=result['metadata']
+                    section_id=enhanced_hit['section_id'],
+                    text=enhanced_hit['text'],
+                    score=enhanced_hit['score'],
+                    source=enhanced_hit['source'],
+                    metadata=enhanced_hit['metadata']
                 )
                 hits.append(hit)
             
-            logger.info(f"Financial concept search found {len(hits)} results")
+            enhanced_count = sum(1 for hit in hits if len(hit.get('text', '')) > 500)
+            logger.info(f"Financial concept search found {len(hits)} results, {enhanced_count} enhanced with full text")
             return hits
             
         except Exception as e:
@@ -154,19 +190,33 @@ class RAGRetriever:
                 filter_dict=filter_dict if filter_dict else None
             )
             
-            # Convert to RetrievalHit format
+            # Convert to RetrievalHit format with text enhancement
             hits = []
             for result in pinecone_results:
+                # Create initial hit
+                hit_dict = {
+                    'section_id': result.get('id', 'unknown'),
+                    'text': result['metadata'].get('text', ''),
+                    'score': float(result['score']),
+                    'source': "rag",
+                    'metadata': result['metadata']
+                }
+                
+                # Enhance with full text from Neo4j (replaces file-based fallback)
+                enhanced_hit = neo4j_text_retriever.enhance_retrieval_with_neo4j_text(hit_dict, min_text_length=500)
+                
+                # Convert to RetrievalHit
                 hit = RetrievalHit(
-                    section_id=result.get('id', 'unknown'),
-                    text=result['metadata'].get('text', ''),
-                    score=float(result['score']),
-                    source="rag",
-                    metadata=result['metadata']
+                    section_id=enhanced_hit['section_id'],
+                    text=enhanced_hit['text'],
+                    score=enhanced_hit['score'],
+                    source=enhanced_hit['source'],
+                    metadata=enhanced_hit['metadata']
                 )
                 hits.append(hit)
             
-            logger.info(f"Cross-company search found {len(hits)} results")
+            enhanced_count = sum(1 for hit in hits if len(hit.get('text', '')) > 500)
+            logger.info(f"Cross-company search found {len(hits)} results, {enhanced_count} enhanced with full text")
             return hits
             
         except Exception as e:

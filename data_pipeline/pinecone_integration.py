@@ -86,11 +86,12 @@ class PineconeVectorStore:
                     'section_type': doc.get('section_name', ''),
                     'document_type': doc.get('document_type', ''),
                     'section_filename': doc.get('section_filename', ''),
+                    'source_file': doc.get('section_filename', ''),  # For text fallback
                     'doc_filename': doc.get('doc_filename', ''),
-                    'text': doc.get('text', '')[:1000],  # Truncate text for metadata
+                    'text': doc.get('text', '')[:1500],  # Truncate to stay under 40KB
                     'filing_date': doc.get('filing_date', ''),
                     'cik': doc.get('cik', ''),
-                    'financial_entities': json.dumps(doc.get('financial_entities', {}))
+                    'financial_entities': json.dumps(doc.get('financial_entities', {}))[:2000]  # Truncate JSON
                 }
                 
                 vectors.append({

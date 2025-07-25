@@ -439,9 +439,9 @@ class IntegratedFinancialGraphBuilder:
 
 if __name__ == "__main__":
     # --- Connection details ---
-    URI = "neo4j://localhost:7687"
+    URI = "neo4j+s://ea31579d.databases.neo4j.io"
     USER = "neo4j"
-    PASSWORD = "newpassword"
+    PASSWORD = "qKcfMP9ZHvkmpZzNJ5OmqwFSqmCj8sscfzxZroEbpfM"
 
     # --- Data location ---
     DATA_DIRECTORY = "zion_10k_md&a_chunked"
