@@ -40,7 +40,7 @@ class ImprovedHybridRetriever:
                 logger.warning(f"Failed to initialize Pinecone for hybrid: {e}")
                 self.pinecone_store = None
     
-    def execute_hybrid_retrieval(self, query: str, metadata: Dict[str, Any], top_k: int = 15) -> List[RetrievalHit]:
+    def execute_hybrid_retrieval(self, query: str, metadata: Dict[str, Any], top_k: int = 20) -> List[RetrievalHit]:
         """
         Execute improved hybrid retrieval with better temporal handling:
         1. Check data availability for requested filters
@@ -85,7 +85,7 @@ class ImprovedHybridRetriever:
             return []
     
     def _pinecone_filtered_search(self, query: str, metadata: Dict[str, Any], top_k: int) -> List[RetrievalHit]:
-        """Use Pinecone with metadata filtering - FIXED VERSION"""
+        """Use Pinecone with metadata filtering - UPDATED for chunked data"""
         try:
             # Build Pinecone filter dict (use proper format for new API)
             filter_dict = {}
@@ -112,16 +112,27 @@ class ImprovedHybridRetriever:
             # Convert to RetrievalHit format
             hits = []
             for result in pinecone_results:
+                # Handle both old and new metadata formats
+                result_metadata = result['metadata']
                 hit = RetrievalHit(
                     section_id=result.get('id', 'unknown'),
-                    text=result['metadata'].get('text', ''),
+                    text=result_metadata.get('text', ''),
                     score=float(result['score']),
                     source="hybrid",
-                    metadata=result['metadata']
+                    metadata={
+                        "section_name": result_metadata.get('section_name', 'Unknown'),
+                        "source_filename": result_metadata.get('source_filename', result_metadata.get('filename', 'Unknown')),
+                        "company": result_metadata.get('company', 'Unknown'),
+                        "year": result_metadata.get('year', 0),
+                        "quarter": result_metadata.get('quarter', 'Unknown'),
+                        "doc_type": result_metadata.get('document_type', 'Unknown'),
+                        "chunk_index": result_metadata.get('chunk_index', 0),
+                        "total_chunks": result_metadata.get('total_chunks', 1)
+                    }
                 )
                 hits.append(hit)
             
-            logger.info(f"Pinecone filtered search found {len(hits)} results")
+            logger.info(f"Pinecone filtered search found {len(hits)} chunk results")
             return hits
             
         except Exception as e:
@@ -129,7 +140,7 @@ class ImprovedHybridRetriever:
             return []
     
     def _relaxed_temporal_search(self, query: str, metadata: Dict[str, Any], top_k: int) -> List[RetrievalHit]:
-        """Search with relaxed year constraints for temporal queries"""
+        """Search with relaxed year constraints for temporal queries - UPDATED for chunked data"""
         try:
             company = metadata.get("company")
             target_year = int(metadata.get("year", 2024))
@@ -159,18 +170,28 @@ class ImprovedHybridRetriever:
                     # Convert to RetrievalHit format
                     hits = []
                     for result in results:
+                        result_metadata = result['metadata']
                         hit = RetrievalHit(
                             section_id=result.get('id', 'unknown'),
-                            text=result['metadata'].get('text', ''),
+                            text=result_metadata.get('text', ''),
                             score=float(result['score']),
                             source="hybrid_temporal",
-                            metadata=result['metadata']
+                            metadata={
+                                "section_name": result_metadata.get('section_name', 'Unknown'),
+                                "source_filename": result_metadata.get('source_filename', result_metadata.get('filename', 'Unknown')),
+                                "company": result_metadata.get('company', 'Unknown'),
+                                "year": result_metadata.get('year', 0),
+                                "quarter": result_metadata.get('quarter', 'Unknown'),
+                                "doc_type": result_metadata.get('document_type', 'Unknown'),
+                                "chunk_index": result_metadata.get('chunk_index', 0),
+                                "total_chunks": result_metadata.get('total_chunks', 1)
+                            }
                         )
                         hits.append(hit)
                     
                     return hits
             
-            logger.info(f"No results found for {company} in any year range")
+            logger.info(f"No chunk results found for {company} in any year range")
             return []
             
         except Exception as e:
@@ -178,19 +199,21 @@ class ImprovedHybridRetriever:
             return []
     
     def _neo4j_fallback_search(self, query: str, metadata: Dict[str, Any], top_k: int) -> List[RetrievalHit]:
-        """Enhanced Neo4j fallback with better company search"""
+        """Enhanced Neo4j fallback with better company search and context expansion"""
         try:
             driver = self.neo4j_retriever._get_driver()
             
-            # First try: Company-specific search without year constraints
+            # First try: Company-specific search with new chunked schema
             if metadata.get("company"):
                 company_query = """
                 MATCH (c:Company {name: $company})-[:HAS_YEAR]->(y:Year)-[:HAS_QUARTER]->(q:Quarter)
-                      -[:HAS_DOC]->(d:Document)-[:HAS_SECTION]->(s:Section)
-                WHERE s.text CONTAINS $search_term OR s.section CONTAINS $search_term
+                      -[:HAS_DOC]->(d:Document)-[:HAS_SOURCE_SECTION]->(s:SourceSection)
+                      -[:HAS_CHUNK]->(chunk:Chunk)
+                WHERE chunk.text CONTAINS $search_term OR s.name CONTAINS $search_term
                 RETURN c.name as company, y.value as year, q.label as quarter, 
-                       d.document_type as doc_type, s.section as section_name,
-                       s.filename as section_id, s.text as text, 1.0 as score
+                       d.document_type as doc_type, s.name as section_name,
+                       s.filename as source_filename,
+                       chunk.chunk_id as section_id, chunk.text as text, 1.0 as score
                 ORDER BY y.value DESC
                 LIMIT $top_k
                 """
@@ -210,7 +233,8 @@ class ImprovedHybridRetriever:
                             records = list(result)
                             
                             if records:
-                                hits = []
+                                # Get initial hits
+                                initial_hits = []
                                 for record in records:
                                     hit = RetrievalHit(
                                         section_id=record["section_id"],
@@ -219,25 +243,31 @@ class ImprovedHybridRetriever:
                                         source="hybrid_neo4j",
                                         metadata={
                                             "section_name": record["section_name"],
+                                            "source_filename": record["source_filename"],
                                             "company": record["company"],
                                             "year": record["year"],
                                             "quarter": record["quarter"],
                                             "doc_type": record["doc_type"]
                                         }
                                     )
-                                    hits.append(hit)
+                                    initial_hits.append(hit)
                                 
-                                logger.info(f"Neo4j company search found {len(hits)} results for term '{term}'")
-                                return hits
+                                # Apply context expansion
+                                expanded_hits = self._expand_context(initial_hits, driver)
+                                
+                                logger.info(f"Neo4j company search found {len(initial_hits)} initial results, expanded to {len(expanded_hits)} with context")
+                                return expanded_hits
             
-            # Final fallback: Basic text search
+            # Final fallback: Basic text search with chunked schema
             basic_query = """
             MATCH (c:Company)-[:HAS_YEAR]->(y:Year)-[:HAS_QUARTER]->(q:Quarter)
-                  -[:HAS_DOC]->(d:Document)-[:HAS_SECTION]->(s:Section)
-            WHERE s.text CONTAINS 'business' OR s.text CONTAINS 'strategy'
+                  -[:HAS_DOC]->(d:Document)-[:HAS_SOURCE_SECTION]->(s:SourceSection)
+                  -[:HAS_CHUNK]->(chunk:Chunk)
+            WHERE chunk.text CONTAINS 'business' OR chunk.text CONTAINS 'strategy'
             RETURN c.name as company, y.value as year, q.label as quarter, 
-                   d.document_type as doc_type, s.section as section_name,
-                   s.filename as section_id, s.text as text, 0.5 as score
+                   d.document_type as doc_type, s.name as section_name,
+                   s.filename as source_filename,
+                   chunk.chunk_id as section_id, chunk.text as text, 0.5 as score
             ORDER BY y.value DESC
             LIMIT $top_k
             """
@@ -246,7 +276,7 @@ class ImprovedHybridRetriever:
                 result = session.run(basic_query, {"top_k": top_k})
                 records = list(result)
                 
-                hits = []
+                initial_hits = []
                 for record in records:
                     hit = RetrievalHit(
                         section_id=record["section_id"],
@@ -255,20 +285,125 @@ class ImprovedHybridRetriever:
                         source="hybrid_fallback",
                         metadata={
                             "section_name": record["section_name"],
+                            "source_filename": record["source_filename"],
                             "company": record["company"],
                             "year": record["year"],
                             "quarter": record["quarter"],
                             "doc_type": record["doc_type"]
                         }
                     )
-                    hits.append(hit)
+                    initial_hits.append(hit)
                 
-                logger.info(f"Neo4j fallback search found {len(hits)} results")
-                return hits
+                # Apply context expansion
+                expanded_hits = self._expand_context(initial_hits, driver)
+                
+                logger.info(f"Neo4j fallback search found {len(initial_hits)} initial results, expanded to {len(expanded_hits)} with context")
+                return expanded_hits
                 
         except Exception as e:
             logger.error(f"Neo4j fallback search failed: {e}")
             return []
+
+    def _expand_context(self, hits: List[RetrievalHit], driver) -> List[RetrievalHit]:
+        """
+        Expand context by fetching neighboring chunks for each hit.
+        For each retrieved chunk, get the previous and next chunks from the same source section.
+        """
+        try:
+            expanded_hits = []
+            processed_chunks = set()
+            
+            for hit in hits:
+                # Handle both dict and RetrievalHit objects
+                if isinstance(hit, dict):
+                    chunk_id = hit.get("section_id")
+                    hit_score = hit.get("score", 0.0)
+                    hit_source = hit.get("source", "hybrid")
+                    hit_metadata = hit.get("metadata", {})
+                else:
+                    chunk_id = hit.section_id
+                    hit_score = hit.score
+                    hit_source = hit.source
+                    hit_metadata = hit.metadata
+
+                if not chunk_id:
+                    continue
+                
+                # Skip if we've already processed this chunk
+                if chunk_id in processed_chunks:
+                    continue
+                
+                # Parse chunk index from chunk_id (format: filename_chunk_N)
+                if "_chunk_" in chunk_id:
+                    base_name = chunk_id.rsplit("_chunk_", 1)[0]
+                    try:
+                        chunk_index = int(chunk_id.rsplit("_chunk_", 1)[1])
+                    except ValueError:
+                        # If we can't parse the index, just add the original hit
+                        expanded_hits.append(hit)
+                        processed_chunks.add(chunk_id)
+                        continue
+                    
+                    # Get neighboring chunks (previous and next)
+                    context_query = """
+                    MATCH (s:SourceSection)-[:HAS_CHUNK]->(chunk:Chunk)
+                    WHERE chunk.chunk_id STARTS WITH $base_name + '_chunk_'
+                    AND (chunk.chunk_id = $prev_chunk OR chunk.chunk_id = $current_chunk OR chunk.chunk_id = $next_chunk)
+                    RETURN chunk.chunk_id as chunk_id, chunk.text as text,
+                           s.name as section_name, s.filename as source_filename
+                    ORDER BY chunk.chunk_id
+                    """
+                    
+                    prev_chunk = f"{base_name}_chunk_{max(0, chunk_index - 1)}"
+                    current_chunk = chunk_id
+                    next_chunk = f"{base_name}_chunk_{chunk_index + 1}"
+                    
+                    with driver.session() as session:
+                        result = session.run(context_query, {
+                            "base_name": base_name,
+                            "prev_chunk": prev_chunk,
+                            "current_chunk": current_chunk,
+                            "next_chunk": next_chunk
+                        })
+                        
+                        context_chunks = list(result)
+                        
+                        if context_chunks:
+                            # Combine text from neighboring chunks
+                            combined_text = " ".join([chunk["text"] for chunk in context_chunks])
+                            
+                            # Create an expanded hit with combined context
+                            expanded_hit = RetrievalHit(
+                                section_id=chunk_id,  # Keep original chunk_id for citation
+                                text=combined_text,
+                                score=hit_score,
+                                source=f"{hit_source}_expanded",
+                                metadata={
+                                    **hit_metadata,
+                                    "context_chunks": len(context_chunks),
+                                    "original_chunk_id": chunk_id
+                                }
+                            )
+                            expanded_hits.append(expanded_hit)
+                            
+                            # Mark all processed chunks
+                            for chunk in context_chunks:
+                                processed_chunks.add(chunk["chunk_id"])
+                        else:
+                            # If no neighbors found, just add the original hit
+                            expanded_hits.append(hit)
+                            processed_chunks.add(chunk_id)
+                else:
+                    # If chunk_id doesn't follow expected format, just add the original hit
+                    expanded_hits.append(hit)
+                    processed_chunks.add(chunk_id)
+            
+            return expanded_hits
+            
+        except Exception as e:
+            logger.error(f"Context expansion failed: {e}")
+            # If expansion fails, return original hits
+            return hits
 
 # Global retriever instance
 _improved_hybrid_retriever = ImprovedHybridRetriever()
@@ -283,8 +418,8 @@ def hybrid(state: AgentState) -> AgentState:
         
         logger.info(f"IMPROVED Hybrid node processing: '{query[:50]}...' with metadata: {metadata}")
         
-        # Use improved hybrid retrieval
-        hits = _improved_hybrid_retriever.execute_hybrid_retrieval(query, metadata, top_k=15)
+        # Use improved hybrid retrieval with ~20 chunk optimization
+        hits = _improved_hybrid_retriever.execute_hybrid_retrieval(query, metadata, top_k=20)
         
         # Update state
         state["retrievals"] = hits

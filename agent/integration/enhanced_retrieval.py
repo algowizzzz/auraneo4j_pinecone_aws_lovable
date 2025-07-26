@@ -285,17 +285,11 @@ class EnhancedFinancialRetriever:
         """
         Build enhanced Cypher query that leverages financial entity relationships.
         """
+        
+        # Base query to find sections based on metadata
         base_query = """
         MATCH (c:Company)-[:HAS_YEAR]->(y:Year)-[:HAS_QUARTER]->(q:Quarter)
               -[:HAS_DOC]->(d:Document)-[:HAS_SECTION]->(s:Section)
-        """
-        
-        # Add financial entity joins if entities were detected
-        if financial_entities:
-            base_query += """
-            OPTIONAL MATCH (s)-[:MENTIONS]->(fe:FinancialEntity)
-            OPTIONAL MATCH (s)-[:HAS_RISK]->(r:Risk)
-            OPTIONAL MATCH (s)-[:DISCUSSES_PRODUCT]->(p:Product)
             """
         
         conditions = []
@@ -314,32 +308,46 @@ class EnhancedFinancialRetriever:
             conditions.append("q.label = $quarter")
             params["quarter"] = metadata["quarter"]
         
-        # Financial entity filters
-        if financial_entities:
-            entity_conditions = []
-            for category, entities in financial_entities.items():
-                if entities:
-                    param_name = f"{category}_entities"
-                    entity_conditions.append(f"fe.type IN ${param_name}")
-                    params[param_name] = entities
-            
-            if entity_conditions:
-                conditions.append(f"({' OR '.join(entity_conditions)})")
-        
         where_clause = ""
         if conditions:
             where_clause = "WHERE " + " AND ".join(conditions)
         
-        return_clause = """
+        # If no financial entities, run a simpler query
+        if not financial_entities:
+            return_clause = """
+            RETURN s.filename as section_id, s.text as text, s.section as section_name,
+                   c.name as company, y.value as year, q.label as quarter,
+                   1.0 as score, [] as financial_entities, [] as entity_relationships
+            LIMIT 20
+            """
+            return f"{base_query} {where_clause} {return_clause}", params
+
+        # Query with financial entities
+        entity_conditions = []
+        for category, entities in financial_entities.items():
+            if entities:
+                param_name = f"{category}_entities"
+                entity_conditions.append(f"entity.name IN ${param_name}")
+                params[param_name] = entities
+        
+        entity_where_clause = ""
+        if entity_conditions:
+            entity_where_clause = "WHERE " + " OR ".join(entity_conditions)
+
+        full_query = f"""
+        {base_query}
+        {where_clause}
+        WITH s, c, y, q
+        OPTIONAL MATCH (s)-[rel:MENTIONS|HAS_RISK|DISCUSSES_PRODUCT]->(entity)
+        {entity_where_clause}
+        WITH s, c, y, q, collect(DISTINCT entity) as entities
         RETURN s.filename as section_id, s.text as text, s.section as section_name,
                c.name as company, y.value as year, q.label as quarter,
                1.0 as score,
-               collect(DISTINCT fe.name) as financial_entities,
-               collect(DISTINCT type(r)) as entity_relationships
+               [entity in entities | entity.name] as financial_entities,
+               [entity in entities | labels(entity)] as entity_relationships
         LIMIT 20
         """
-        
-        full_query = f"{base_query} {where_clause} {return_clause}"
         
         return full_query, params
     

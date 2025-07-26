@@ -20,28 +20,51 @@ _llm = ChatOpenAI(
     api_key=os.getenv("OPENAI_API_KEY")
 )
 
-# Financial domain-optimized prompt from readme specifications
+# Business-focused synthesizer prompt for SEC Graph LangGraph Agent
 SYNTH_PROMPT = """\
-You are FinAnswer, a cautious financial analyst AI.
-Answer the user's question ONLY from the provided passages.
-If the answer is not fully supported, say "I don't have enough information."
-Use *concise professional language* (≤ 4 sentences).
-Add bracketed numeric citations like [1], [3] pointing to the passages.
+You are the Synthesizer component of the SEC Graph LangGraph Agent, tasked with generating actionable business insights from validated data retrieved from SEC filings and related financial sources. Your role is to analyze the input data, identify key patterns and trends, and produce a concise, coherent, and business-relevant response that directly addresses the user's query.
 
-User question:
-{question}
+**Key Instructions:**
+1. **Analyze Retrieved Data**: Review all data chunks to identify relevant financial metrics, qualitative insights, and patterns. Prioritize data with high confidence scores.
 
-Passages:
+2. **Synthesize Insights**: Generate 3-5 key business insights that directly address the query's objective. Ensure insights are actionable, specific, and aligned with the query's business value.
+
+3. **Structure Response**: 
+   - Start with a direct answer to the main question
+   - Provide 3-5 specific, actionable insights
+   - Include comparative analysis when relevant
+   - Use professional financial language
+   - Keep response concise but comprehensive (150-300 words)
+
+4. **Citations**: Include bracketed numeric citations [1], [2], etc. pointing to the source passages.
+
+5. **Business Focus**: Tailor insights for executive decision-making, focusing on:
+   - Risk assessment and mitigation strategies
+   - Competitive positioning and market dynamics
+   - Financial performance and operational efficiency
+   - Regulatory compliance and governance
+   - Strategic opportunities and threats
+
+6. **CRITICAL - No Placeholder Values**: NEVER use placeholder values like "XX billion", "$XX million", "XX%", or similar patterns. When specific numerical values are not available in the retrieved data, state "specific figures were not found in the available data" or describe the information qualitatively without using placeholders.
+
+**Only if you truly have insufficient data should you indicate limitations, but always try to provide what insights you can from the available information.**
+
+User Question: {question}
+
+Retrieved Data:
 {context}
-"""
+
+Provide actionable business insights:"""
 
 def _prepare_context_with_citations(retrievals: List[dict]) -> tuple[str, List[str]]:
     """
     Prepare context chunks with citation numbers and return citation list.
+    Updated for chunked data structure.
     Returns (formatted_context, citation_list)
     """
     context_chunks = []
     citations = []
+    seen_sources = {}  # Track unique sources for better citation
     
     for i, hit in enumerate(retrievals, 1):
         text = hit.get("text", "")
@@ -54,7 +77,7 @@ def _prepare_context_with_citations(retrievals: List[dict]) -> tuple[str, List[s
         # Format context chunk with citation number
         context_chunks.append(f"[{i}] {text}")
         
-        # Build citation info
+        # Build citation info with source file attribution
         citation_parts = []
         if source_info.get("company"):
             citation_parts.append(source_info["company"])
@@ -64,8 +87,27 @@ def _prepare_context_with_citations(retrievals: List[dict]) -> tuple[str, List[s
             citation_parts.append(source_info["quarter"])
         if source_info.get("section_name"):
             citation_parts.append(source_info["section_name"])
+            
+        # Use source_filename for citation (the original file, not chunk_id)
+        source_file = source_info.get("source_filename", "Unknown Source")
         
-        citation = f"[{i}] " + " ".join(citation_parts) if citation_parts else f"[{i}] SEC Filing"
+        # Check if this is from a chunked source
+        chunk_info = ""
+        if source_info.get("chunk_index") is not None:
+            total_chunks = source_info.get("total_chunks", 1)
+            if total_chunks > 1:
+                chunk_info = f" (Part {source_info['chunk_index'] + 1}/{total_chunks})"
+        
+        # Build final citation
+        base_citation = " ".join(citation_parts) if citation_parts else "SEC Filing"
+        citation = f"[{i}] {base_citation}{chunk_info}"
+        
+        # Track unique sources for summary
+        if source_file not in seen_sources:
+            seen_sources[source_file] = {"indices": [], "chunks": 0}
+        seen_sources[source_file]["indices"].append(i)
+        seen_sources[source_file]["chunks"] += 1
+        
         citations.append(citation)
     
     formatted_context = "\n\n".join(context_chunks)
@@ -74,64 +116,65 @@ def _prepare_context_with_citations(retrievals: List[dict]) -> tuple[str, List[s
 def _enhance_answer_with_financial_context(answer: str, retrievals: List[dict], query: str) -> str:
     """
     Enhance the answer with financial context and SEC-specific formatting.
+    Focus on providing business value from available data.
     """
-    # Check if answer is too generic or insufficient
-    generic_indicators = [
-        "i don't have enough information",
-        "insufficient information", 
-        "cannot determine",
-        "not provided in the passages"
-    ]
+    # Extract metadata for context regardless of answer content
+    companies = set()
+    years = set()
+    quarters = set()
+    source_files = set()
+    total_chunks = 0
     
-    is_generic = any(indicator in answer.lower() for indicator in generic_indicators)
+    for hit in retrievals:
+        metadata = hit.get("metadata", {})
+        if metadata.get("company"):
+            companies.add(metadata["company"])
+        if metadata.get("year"):
+            years.add(str(metadata["year"]))
+        if metadata.get("quarter"):
+            quarters.add(metadata["quarter"])
+        if metadata.get("source_filename"):
+            source_files.add(metadata["source_filename"])
+        total_chunks += 1
     
-    if is_generic and retrievals:
-        # Try to extract some useful information even if incomplete
-        companies = set()
-        years = set()
-        quarters = set()
-        
-        for hit in retrievals:
-            metadata = hit.get("metadata", {})
-            if metadata.get("company"):
-                companies.add(metadata["company"])
-            if metadata.get("year"):
-                years.add(str(metadata["year"]))
-            if metadata.get("quarter"):
-                quarters.add(metadata["quarter"])
-        
-        context_info = []
-        if companies:
-            context_info.append(f"Companies: {', '.join(sorted(companies))}")
-        if years:
-            context_info.append(f"Years: {', '.join(sorted(years))}")
-        if quarters:
-            context_info.append(f"Quarters: {', '.join(sorted(quarters))}")
-        
-        if context_info:
-            answer += f"\n\nAvailable data covers: {'; '.join(context_info)}."
+    # Always add data coverage information for transparency
+    context_info = []
+    if companies:
+        context_info.append(f"Companies: {', '.join(sorted(companies))}")
+    if years:
+        context_info.append(f"Years: {', '.join(sorted(years))}")
+    if quarters:
+        context_info.append(f"Quarters: {', '.join(sorted(quarters))}")
+    
+    # Add source information
+    unique_sources = len(source_files)
+    if unique_sources > 0:
+        context_info.append(f"Sources: {unique_sources} document(s), {total_chunks} text sections")
+    
+    if context_info:
+        answer += f"\n\n**Data Coverage**: {'; '.join(context_info)}."
     
     return answer
 
 def synthesizer(state: AgentState) -> AgentState:
     """
-    Synthesizer node - generates concise, well-cited answers from retrieval results.
+    Synthesizer node - generates actionable business insights from retrieval results.
     
     Features:
-    - Financial domain expertise
-    - Proper citation formatting
-    - Cautious approach (admits when information insufficient)
-    - SEC-specific context enhancement
+    - Business-focused analysis and insights
+    - Proper citation formatting  
+    - Proactive approach (maximizes value from available data)
+    - SEC-specific financial context
     """
     try:
         retrievals = state.get("retrievals", [])
         query = state.get("query_raw", "")
         
-        logger.info(f"Synthesizing answer from {len(retrievals)} retrieval results")
+        logger.info(f"Synthesizing business insights from {len(retrievals)} retrieval results")
         
         if not retrievals:
             # No results to synthesize from
-            state["final_answer"] = "I don't have enough information to answer your question. No relevant documents were found."
+            state["final_answer"] = "No relevant documents were found to answer your question. Please try a different query or check if the requested companies/time periods are available in our database."
             state["citations"] = []
             logger.warning("Synthesis with no retrieval results")
             return state
@@ -139,15 +182,16 @@ def synthesizer(state: AgentState) -> AgentState:
         # Prepare context and citations
         context, citations = _prepare_context_with_citations(retrievals)
         
-        # Generate answer using LLM
+        # Generate answer using LLM with business-focused prompt
         prompt = SYNTH_PROMPT.format(question=query, context=context)
         
         try:
             response = _llm.invoke(prompt)
             raw_answer = response.content.strip()
+            logger.info(f"Generated business insights: {len(raw_answer)} characters")
         except Exception as e:
             logger.error(f"LLM synthesis failed: {e}")
-            raw_answer = "I encountered an error while analyzing the information."
+            raw_answer = "I encountered an error while analyzing the retrieved information, but I can confirm relevant data was found."
         
         # Enhance answer with financial context
         enhanced_answer = _enhance_answer_with_financial_context(raw_answer, retrievals, query)

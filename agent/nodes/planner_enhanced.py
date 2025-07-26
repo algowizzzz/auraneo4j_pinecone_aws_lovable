@@ -103,7 +103,7 @@ class QueryClassifier:
         
         # Tabular data detection
         tabular_score = cls._pattern_match_score(query_lower, cls.TABULAR_PATTERNS)
-        if tabular_score > 0.3:  # Lowered threshold for better detection
+        if tabular_score > 0.5:
             return QueryType.TABULAR_DATA, tabular_score
             
         # Section content detection
@@ -280,19 +280,11 @@ def _extract_enhanced_metadata(query: str) -> Dict[str, Any]:
         r'\b(Goldman|Morgan|Wells|Citi|Truist|Fifth Third)\b'
     ]
     
-    companies_found = []
     for pattern in company_patterns:
-        matches = re.findall(pattern, query, re.IGNORECASE)
-        if matches:
-            companies_found.extend(matches)
-    
-    if companies_found:
-        # If multiple companies found (for comparison queries), store all
-        if len(companies_found) > 1:
-            metadata["companies"] = companies_found
-            metadata["company"] = companies_found[0]  # Primary company
-        else:
-            metadata["company"] = companies_found[0]
+        match = re.search(pattern, query, re.IGNORECASE)
+        if match:
+            metadata["company"] = match.group(1)
+            break
     
     # Year extraction
     year_match = re.search(r'\b(20[2-3]\d)\b', query)
@@ -370,62 +362,47 @@ def planner(state: AgentState) -> AgentState:
         routing_decision = EnhancedQueryRouter.route(query_type, metadata_completeness)
         logger.info(f"Routing decision: {routing_decision['route']} (reason: {routing_decision['reason']})")
         
-        # Step 4: LLM metadata completion (route locked for high-confidence classifications)
-        if classification_confidence > 0.5 and query_type in [QueryType.TABULAR_DATA, QueryType.SECTION_CONTENT]:
-            # For high-confidence tabular/section queries, lock the route to prevent LLM override
-            logger.info(f"High-confidence {query_type.value} query - locking route to {routing_decision['route']}")
-            final_plan = {
-                "route": routing_decision["route"],  # Force rule-based route
+        # Step 4: LLM validation and metadata completion
+        llm_prompt = (
+            ENHANCED_PLANNER_SYS
+            + f"\n\nQuery: {query}"
+            + f"\n\nPre-classified as: {query_type.value}"
+            + f"\n\nSuggested route: {routing_decision['route']}"
+            + f"\n\nPartial metadata: {json.dumps(metadata, indent=2)}"
+            + f"\n\nComplete the metadata extraction and validate/adjust the routing decision."
+        )
+        
+        response = _llm.invoke(llm_prompt)
+        result_text = response.content.strip()
+        
+        # Clean markdown if present
+        if result_text.startswith("```"):
+            result_text = result_text.split('\n', 1)[1]
+        if result_text.endswith("```"):
+            result_text = result_text.rsplit('\n', 1)[0]
+        
+        try:
+            llm_plan = json.loads(result_text)
+        except json.JSONDecodeError as e:
+            logger.warning(f"LLM returned invalid JSON, using rule-based routing: {result_text}")
+            llm_plan = {
+                "route": routing_decision["route"],
                 "fallback": routing_decision["fallback"],
                 "metadata": metadata,
-                "sub_tasks": [],
-                "reasoning": f"Rule-based routing: {routing_decision['reason']}",
-                "query_type": query_type.value,
-                "classification_confidence": classification_confidence,
-                "metadata_completeness": metadata_completeness
+                "reasoning": routing_decision["reason"]
             }
-        else:
-            # For other queries, use LLM validation
-            llm_prompt = (
-                ENHANCED_PLANNER_SYS
-                + f"\n\nQuery: {query}"
-                + f"\n\nPre-classified as: {query_type.value}"
-                + f"\n\nSuggested route: {routing_decision['route']}"
-                + f"\n\nPartial metadata: {json.dumps(metadata, indent=2)}"
-                + f"\n\nComplete the metadata extraction and validate/adjust the routing decision."
-            )
-            
-            response = _llm.invoke(llm_prompt)
-            result_text = response.content.strip()
-            
-            # Clean markdown if present
-            if result_text.startswith("```"):
-                result_text = result_text.split('\n', 1)[1]
-            if result_text.endswith("```"):
-                result_text = result_text.rsplit('\n', 1)[0]
-            
-            try:
-                llm_plan = json.loads(result_text)
-            except json.JSONDecodeError as e:
-                logger.warning(f"LLM returned invalid JSON, using rule-based routing: {result_text}")
-                llm_plan = {
-                    "route": routing_decision["route"],
-                    "fallback": routing_decision["fallback"],
-                    "metadata": metadata,
-                    "reasoning": routing_decision["reason"]
-                }
-            
-            # Step 5: Finalize plan with enhancements
-            final_plan = {
-                "route": llm_plan.get("route", routing_decision["route"]),
-                "fallback": llm_plan.get("fallback", routing_decision["fallback"]),
-                "metadata": llm_plan.get("metadata", metadata),
-                "sub_tasks": llm_plan.get("sub_tasks", []),
-                "reasoning": llm_plan.get("reasoning", routing_decision["reason"]),
-                "query_type": query_type.value,
-                "classification_confidence": classification_confidence,
-                "metadata_completeness": metadata_completeness
-            }
+        
+        # Step 5: Finalize plan with enhancements
+        final_plan = {
+            "route": llm_plan.get("route", routing_decision["route"]),
+            "fallback": llm_plan.get("fallback", routing_decision["fallback"]),
+            "metadata": llm_plan.get("metadata", metadata),
+            "sub_tasks": llm_plan.get("sub_tasks", []),
+            "reasoning": llm_plan.get("reasoning", routing_decision["reason"]),
+            "query_type": query_type.value,
+            "classification_confidence": classification_confidence,
+            "metadata_completeness": metadata_completeness
+        }
         
         # Step 6: Company name normalization
         if COMPANY_MAPPING_AVAILABLE and final_plan["metadata"].get("company"):

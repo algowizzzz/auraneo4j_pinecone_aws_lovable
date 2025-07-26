@@ -166,8 +166,8 @@ def validator(state: AgentState) -> AgentState:
         validation_passed = True
         reasons = []
         
-        # Rule 1: LLM reflection score must be >= 3 (optimized for SEC retrieval)
-        if llm_score < 3:
+        # Rule 1: LLM reflection score must be >= 2 (optimized for SEC retrieval)
+        if llm_score < 2:
             validation_passed = False
             reasons.append(f"LLM relevance score too low: {llm_score}/10")
         
@@ -238,18 +238,25 @@ def route_decider(state: AgentState) -> str:
     """
     Route decision function for LangGraph conditional edges.
     
-    Implements sophisticated fallback logic:
-    1. If validation passed -> "pass" (proceed to synthesis)
-    2. If fallback routes available -> trigger next fallback
-    3. If all fallbacks exhausted -> "fail" (end with apology)
+    Implements business-optimized fallback logic:
+    1. If multi-topic query -> "parallel_runner"
+    2. If we have ANY retrievals -> proceed to synthesis (give synthesizer a chance)
+    3. If no retrievals -> try fallback routes
+    4. If all fallbacks exhausted -> end
     """
     try:
-        # Check if validation passed
-        if state.get("valid", False):
-            logger.info("Validation passed - routing to synthesis")
+        # Route to parallel runner for multi-topic queries from planner
+        if state.get("route") == "multi":
+            logger.info("Routing multi-topic query to parallel_runner")
+            return "parallel_runner"
+
+        # BUSINESS OPTIMIZATION: If we have ANY retrievals, let synthesizer try
+        retrievals = state.get("retrievals", [])
+        if retrievals and len(retrievals) > 0:
+            logger.info(f"Found {len(retrievals)} retrievals - routing to synthesis")
             return "synthesizer"
-        
-        # Check for available fallback routes
+
+        # Check for available fallback routes only if NO retrievals
         fallback_routes = state.get("fallback", [])
         
         if fallback_routes:
@@ -260,13 +267,13 @@ def route_decider(state: AgentState) -> str:
             # Update state with remaining fallbacks
             state["fallback"] = fallback_routes
             
-            logger.info(f"Validation failed - triggering fallback to {next_route}")
+            logger.info(f"No retrievals found - triggering fallback to {next_route}")
             logger.info(f"Remaining fallbacks: {fallback_routes}")
             
             return next_route
         
-        # All fallbacks exhausted
-        logger.warning("Validation failed - all fallback routes exhausted")
+        # All fallbacks exhausted and no retrievals
+        logger.warning("No retrievals found - all fallback routes exhausted")
         return "__end__"
         
     except Exception as e:

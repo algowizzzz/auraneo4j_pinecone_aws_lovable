@@ -15,7 +15,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Import standardized real environment fixtures
 from tests.real_env_fixture import real_environment, planner_with_real_env, get_real_env
 
-# Setup logging
+# Import planner and AgentState
+from agent.nodes.planner import planner
+from agent.state import AgentState
+
+# Configure logging for detailed output
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -25,7 +29,6 @@ class TestPlannerNodeBasics:
     def test_planner_import(self):
         """Test that planner node can be imported successfully"""
         try:
-            from agent.nodes.planner import planner
             assert callable(planner), "Planner should be a callable function"
             logger.info("✅ Planner node import successful")
         except ImportError as e:
@@ -34,7 +37,6 @@ class TestPlannerNodeBasics:
     def test_agent_state_import(self):
         """Test that AgentState can be imported and used"""
         try:
-            from agent.state import AgentState
             
             # Test basic state creation
             test_state = {
@@ -179,7 +181,6 @@ class TestPlannerFinancialEntityExtraction:
     
     @pytest.fixture
     def planner_function(self):
-        from agent.nodes.planner import planner
         return planner
     
     @pytest.fixture
@@ -275,7 +276,6 @@ class TestPlannerMultiTopicDetection:
     
     @pytest.fixture
     def planner_function(self):
-        from agent.nodes.planner import planner
         return planner
     
     @pytest.fixture
@@ -359,7 +359,6 @@ class TestPlannerPerformance:
     
     @pytest.fixture
     def planner_function(self):
-        from agent.nodes.planner import planner
         return planner
     
     def test_planner_response_time(self, planner_function):
@@ -441,6 +440,47 @@ class TestPlannerPerformance:
                 
             except Exception as e:
                 pytest.fail(f"Planner failed to handle {test_case['description']}: {e}")
+
+@pytest.mark.parametrize("query, expected_ticker", [
+    ("What are Citigroup's assets in 2025?", "C"),
+    ("From Goldman Sachs' 2025 10-K, what are the net revenues?", "GS"),
+    ("Tell me about WFC's risk factors.", "WFC"),
+    ("Compare JPM and BAC's performance.", "JPM"), # Should pick the first one
+    ("What were the 2024 results for Bank of America?", "BAC"),
+    ("Explain Zions Bancorporation's business model.", "ZION"),
+    ("What is the outlook for Truist Financial?", "TFC"),
+])
+def test_company_normalization(query, expected_ticker):
+    """
+    Tests the planner's ability to correctly normalize company names and tickers.
+    """
+    logger.info(f"Testing query: '{query}'")
+    
+    # Initial state
+    initial_state = AgentState(
+        query_raw=query,
+        retrievals=[],
+        state_stack=[],
+        error_messages=[],
+        tools_used=[],
+        financial_entities={},
+        route="",
+        fallback=[],
+        metadata={}
+    )
+    
+    # Run the planner
+    result_state = planner(initial_state)
+    
+    # Log the result
+    logger.info(f"Raw LLM metadata: {result_state.get('metadata', {})}")
+    
+    # Get the normalized company ticker
+    company_ticker = result_state["metadata"].get("company")
+    
+    # Assert that the company ticker is correct
+    assert company_ticker == expected_ticker, \
+        f"Failed to normalize for query: '{query}'. Expected {expected_ticker}, but got {company_ticker}."
 
 if __name__ == "__main__":
     # Run tests with verbose output

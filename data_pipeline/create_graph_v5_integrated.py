@@ -6,9 +6,9 @@ import numpy as np
 from collections import defaultdict
 from neo4j import GraphDatabase
 from sentence_transformers import SentenceTransformer
-from pinecone_integration import PineconeVectorStore
-from enhanced_graph_schema import EnhancedGraphSchemaManager, FinancialEntityExtractor
-from data_validator import SECDataValidator
+from .pinecone_integration import PineconeVectorStore
+from .enhanced_graph_schema import EnhancedGraphSchemaManager, FinancialEntityExtractor
+from .data_validator import SECDataValidator
 import logging
 from dotenv import load_dotenv
 
@@ -85,15 +85,35 @@ class IntegratedFinancialGraphBuilder:
         
         # Uniqueness for documents and sections
         tx.run("CREATE CONSTRAINT unique_document IF NOT EXISTS FOR (d:Document) REQUIRE d.filename IS UNIQUE")
-        tx.run("CREATE CONSTRAINT unique_section IF NOT EXISTS FOR (s:Section) REQUIRE s.filename IS UNIQUE")
+        tx.run("CREATE CONSTRAINT unique_source_section IF NOT EXISTS FOR (s:SourceSection) REQUIRE s.filename IS UNIQUE")
+        tx.run("CREATE CONSTRAINT unique_chunk IF NOT EXISTS FOR (c:Chunk) REQUIRE c.chunk_id IS UNIQUE")
         
         # Enhanced indexes for search capabilities
         tx.run("""
         CREATE INDEX doc_lookup IF NOT EXISTS FOR (d:Document) 
         ON (d.company, d.year, d.quarter, d.document_type)
         """)
-        tx.run("CREATE FULLTEXT INDEX section_text_index IF NOT EXISTS FOR (s:Section) ON EACH [s.text, s.name]")
-        tx.run("CREATE INDEX section_embedding_index IF NOT EXISTS FOR (s:Section) ON (s.embedding_dimension)")
+        tx.run("CREATE FULLTEXT INDEX chunk_text_index IF NOT EXISTS FOR (c:Chunk) ON EACH [c.text, c.name]")
+        tx.run("CREATE INDEX chunk_embedding_index IF NOT EXISTS FOR (c:Chunk) ON (c.embedding_dimension)")
+
+    def _clean_text(self, text):
+        # Remove artifacts
+        text = re.sub(r'Page \d+', '', text)
+        # Flatten simple tables (example: convert | Key | Value | to Key: Value)
+        text = re.sub(r'\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|', r'\1: \2\n', text)
+        # Remove excessive whitespace
+        text = ' '.join(text.split())
+        return text
+
+    def _chunk_text_by_size(self, text, max_words=1500, overlap_words=300):
+        words = text.split()
+        if not words: return []
+        
+        chunks = []
+        for i in range(0, len(words), max_words - overlap_words):
+            chunk = ' '.join(words[i:i + max_words])
+            chunks.append(chunk)
+        return chunks
 
     def generate_embeddings(self, text_list):
         """Generate embeddings for a list of texts"""
@@ -156,99 +176,78 @@ class IntegratedFinancialGraphBuilder:
             for (company, doc_type, year, quarter), filenames in grouped_files.items():
                 logger.info(f"Processing {company} {year} {quarter} {doc_type}")
                 
-                # Define the parent Document's unique filename
                 document_filename = f"SEC_{company}_{year}_{quarter}_{doc_type}"
                 
-                # Use metadata from the first file in the group to create the parent doc
+                if not filenames: continue
+                
                 with open(filenames[0], 'r') as f:
                     record = json.load(f)
-                    
-                    # Extract company classification from first document
                     company_text = record.get("text", "")
-                    
-                    # Prepare document parameters
                     doc_params = {
-                        "domain": record.get("domain"),
-                        "subdomain": record.get("subdomain"),
-                        "company": company,
-                        "year": int(year),
-                        "quarter_label": quarter,
-                        "doc_type": doc_type,
-                        "filename": document_filename,
-                        "filing_date": record.get("filing_date"),
-                        "cik": record.get("cik"),
+                        "domain": record.get("domain"), "subdomain": record.get("subdomain"),
+                        "company": company, "year": int(year), "quarter_label": quarter,
+                        "doc_type": doc_type, "filename": document_filename,
+                        "filing_date": record.get("filing_date"), "cik": record.get("cik"),
                         "accession_number": record.get("accession_number")
                     }
                 
-                # Create the hierarchy up to the Document node
                 session.execute_write(self._create_document_tx, doc_params)
-                
-                # Enhance company classification
                 self.schema_manager.enhance_company_classification(company, company_text)
 
-                # Collect all section data for batch processing
-                section_data_list = []
+                all_chunks_data = []
                 pinecone_documents = []
-                
+
                 for f_path in filenames:
                     with open(f_path, 'r') as f:
                         record = json.load(f)
                         basename = os.path.basename(f_path)
                         
                         section_text = record.get("text", "")
-                        section_name = record.get("section", "Unnamed Section")
+                        cleaned_text = self._clean_text(section_text)
+                        chunks = self._chunk_text_by_size(cleaned_text)
                         
-                        # Extract financial entities
-                        extracted_entities = self.entity_extractor.extract_entities(section_text)
-                        
-                        section_info = {
-                            "doc_filename": document_filename,
-                            "section_filename": basename,
-                            "section_name": section_name,
-                            "text": section_text,
-                            "financial_entities": extracted_entities,
-                            "record": record
-                        }
-                        section_data_list.append(section_info)
-                        
-                        # Prepare data for Pinecone
-                        if self.pinecone_store:
-                            pinecone_doc = {
-                                **section_info,
-                                "company": company,
-                                "year": int(year),
-                                "quarter": quarter,
-                                "document_type": doc_type,
-                                "filing_date": record.get("filing_date"),
-                                "cik": record.get("cik"),
-                                "accession_number": record.get("accession_number")
-                            }
-                            pinecone_documents.append(pinecone_doc)
+                        if not chunks: continue
 
-                # Generate embeddings for all sections in batch
-                if section_data_list:
-                    texts = [data["text"] for data in section_data_list]
+                        session.execute_write(self._create_source_section_tx, {"doc_filename": document_filename, "source_filename": basename, "section_name": record.get("section", "Unnamed Section")})
+
+                        for i, chunk_text in enumerate(chunks):
+                            chunk_id = f"{basename}_chunk_{i}"
+                            extracted_entities = self.entity_extractor.extract_entities(chunk_text)
+                            
+                            chunk_data = {
+                                "source_filename": basename,
+                                "chunk_id": chunk_id,
+                                "text": chunk_text,
+                                "chunk_index": i,
+                                "financial_entities": extracted_entities,
+                                "record": record
+                            }
+                            all_chunks_data.append(chunk_data)
+                            
+                            if self.pinecone_store:
+                                pinecone_doc = {
+                                    "company": company, "year": int(year), "quarter": quarter,
+                                    "document_type": doc_type, "filing_date": record.get("filing_date"),
+                                    "cik": record.get("cik"), "accession_number": record.get("accession_number"),
+                                    "source_filename": basename, "chunk_index": i, 
+                                    "total_chunks": len(chunks), "text": chunk_text
+                                }
+                                pinecone_documents.append(pinecone_doc)
+
+                if all_chunks_data:
+                    texts = [data["text"] for data in all_chunks_data]
                     embeddings = self.generate_embeddings(texts)
                     
-                    # Process each section with its embedding and entities
-                    for i, section_data in enumerate(section_data_list):
-                        section_data["embedding"] = embeddings[i]
-                        section_data["embedding_dimension"] = len(embeddings[i])
-                        
-                        # Create section with embedding
-                        session.execute_write(self._create_section_with_embedding_tx, section_data)
-                        
-                        # Create financial entities and relationships
-                        self.schema_manager.create_financial_entities(section_data, section_data["financial_entities"])
+                    for i, chunk_data in enumerate(all_chunks_data):
+                        chunk_data["embedding"] = embeddings[i]
+                        chunk_data["embedding_dimension"] = len(embeddings[i])
+                        session.execute_write(self._create_chunk_tx, chunk_data)
+                        self.schema_manager.create_financial_entities(chunk_data, chunk_data["financial_entities"])
                 
-                # Upload to Pinecone if available
                 if self.pinecone_store and pinecone_documents:
                     try:
-                        success = self.pinecone_store.upsert_documents(pinecone_documents)
-                        if success:
-                            logger.info(f"Successfully uploaded {len(pinecone_documents)} documents to Pinecone")
-                        else:
-                            logger.warning("Failed to upload documents to Pinecone")
+                        self.pinecone_store.upsert_documents(pinecone_documents)
+                        logger.info(f"Successfully uploaded {len(pinecone_documents)} documents to Pinecone")
                     except Exception as e:
                         logger.error(f"Error uploading to Pinecone: {e}")
 
@@ -278,48 +277,48 @@ class IntegratedFinancialGraphBuilder:
         tx.run(query, **params)
 
     @staticmethod
-    def _create_section_with_embedding_tx(tx, params):
-        # Clean the text by replacing newlines with spaces
-        clean_text = params.get("text", "").replace('\n', ' ')
-        
-        # Convert embedding to proper format for Neo4j
-        embedding = params.get("embedding", [])
-        
+    def _create_source_section_tx(tx, params):
         query = """
         MATCH (doc:Document {filename: $doc_filename})
-        MERGE (section:Section {filename: $section_filename})
+        MERGE (doc)-[:HAS_SOURCE_SECTION]->(src:SourceSection {filename: $source_filename})
+        ON CREATE SET src.name = $section_name
+        """
+        tx.run(query, **params)
+
+    @staticmethod
+    def _create_chunk_tx(tx, params):
+        query = """
+        MATCH (src:SourceSection {filename: $source_filename})
+        MERGE (c:Chunk {chunk_id: $chunk_id})
         ON CREATE SET
-            section.name = $section_name,
-            section.section = $section_name,
-            section.text = $clean_text,
-            section.embedding = $embedding,
-            section.embedding_dimension = $embedding_dimension,
-            section.financial_entities = $financial_entities_json,
-            section.word_count = $word_count,
-            section.created = datetime()
+            c.text = $text,
+            c.embedding = $embedding,
+            c.embedding_dimension = $embedding_dimension,
+            c.financial_entities = $financial_entities_json,
+            c.word_count = $word_count,
+            c.created = datetime()
         ON MATCH SET
-            section.text = $clean_text,
-            section.embedding = $embedding,
-            section.embedding_dimension = $embedding_dimension,
-            section.financial_entities = $financial_entities_json,
-            section.word_count = $word_count,
-            section.updated = datetime()
-        MERGE (doc)-[:HAS_SECTION]->(section)
+            c.text = $text,
+            c.embedding = $embedding,
+            c.embedding_dimension = $embedding_dimension,
+            c.financial_entities = $financial_entities_json,
+            c.word_count = $word_count,
+            c.updated = datetime()
+        MERGE (src)-[:HAS_CHUNK {index: $chunk_index}]->(c)
         """
         
-        # Prepare parameters
-        section_params = {
-            "doc_filename": params["doc_filename"],
-            "section_filename": params["section_filename"],
-            "section_name": params["section_name"],
-            "clean_text": clean_text,
-            "embedding": embedding,
+        chunk_params = {
+            "source_filename": params["source_filename"],
+            "chunk_id": params["chunk_id"],
+            "text": params["text"],
+            "embedding": params["embedding"],
             "embedding_dimension": params["embedding_dimension"],
             "financial_entities_json": json.dumps(params["financial_entities"]),
-            "word_count": len(clean_text.split())
+            "word_count": len(params["text"].split()),
+            "chunk_index": params["chunk_index"]
         }
         
-        tx.run(query, **section_params)
+        tx.run(query, **chunk_params)
 
     def _create_advanced_relationships(self):
         """Create all advanced relationships"""
@@ -383,11 +382,10 @@ class IntegratedFinancialGraphBuilder:
     def _create_semantic_links_tx(tx, threshold):
         # Create semantic similarity links for same section types across companies
         query = """
-        MATCH (s1:Section), (s2:Section)
+        MATCH (s1:Chunk), (s2:Chunk)
         WHERE s1 <> s2 
         AND s1.embedding IS NOT NULL 
         AND s2.embedding IS NOT NULL
-        AND s1.section = s2.section  // Same section type across different companies
         WITH s1, s2, 
              reduce(dot = 0.0, i IN range(0, size(s1.embedding)-1) | 
                 dot + s1.embedding[i] * s2.embedding[i]) AS dot_product,

@@ -45,10 +45,11 @@ class Neo4jCypherRetriever:
         conditions = []
         params = {}
         
-        # Base query structure matching our enhanced schema
+        # Updated query structure for chunked schema
         base_query = """
         MATCH (c:Company)-[:HAS_YEAR]->(y:Year)-[:HAS_QUARTER]->(q:Quarter)
-              -[:HAS_DOC]->(d:Document)-[:HAS_SECTION]->(s:Section)
+              -[:HAS_DOC]->(d:Document)-[:HAS_SOURCE_SECTION]->(s:SourceSection)
+              -[:HAS_CHUNK]->(chunk:Chunk)
         """
         
         # Add conditions based on available metadata
@@ -73,17 +74,19 @@ class Neo4jCypherRetriever:
         if conditions:
             where_clause = "WHERE " + " AND ".join(conditions)
         
-        # Return statement with section data
+        # Return statement with chunk data and source section info
         return_clause = """
-        RETURN s.filename as section_id, 
-               s.text as text,
-               s.section as section_name,
+        RETURN chunk.chunk_id as section_id, 
+               chunk.text as text,
+               s.name as section_name,
+               s.filename as source_filename,
                c.name as company,
                y.value as year,
                q.label as quarter,
                d.document_type as doc_type,
-               s.financial_entities as entities
-        ORDER BY y.value DESC, q.label, s.section
+               chunk.financial_entities as entities,
+               chunk.word_count as word_count
+        ORDER BY y.value DESC, q.label, s.name, chunk.chunk_id
         LIMIT 20
         """
         
@@ -105,22 +108,24 @@ class Neo4jCypherRetriever:
                 hits = []
                 for record in result:
                     hit = RetrievalHit(
-                        section_id=record["section_id"],
+                        section_id=record["section_id"],  # Now chunk_id
                         text=record["text"] or "",
                         score=1.0,  # Cypher results are exact matches
                         source="cypher",
                         metadata={
                             "section_name": record["section_name"],
+                            "source_filename": record["source_filename"],  # For citation
                             "company": record["company"],
                             "year": record["year"],
                             "quarter": record["quarter"],
                             "doc_type": record["doc_type"],
-                            "financial_entities": record["entities"]
+                            "financial_entities": record["entities"],
+                            "word_count": record.get("word_count", 0)
                         }
                     )
                     hits.append(hit)
                 
-                logger.info(f"Cypher retrieval found {len(hits)} sections")
+                logger.info(f"Cypher retrieval found {len(hits)} chunks")
                 return hits
                 
         except Exception as e:

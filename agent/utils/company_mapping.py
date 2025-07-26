@@ -32,6 +32,16 @@ class CompanyMapper:
             "BOA": "BAC", 
             "BAC": "BAC",
             
+            "GOLDMAN SACHS": "GS",
+            "GOLDMAN SACHS GROUP": "GS",
+            "GOLDMAN SACHS & CO": "GS",
+            "GOLDMAN": "GS",
+            "GS": "GS",
+            
+            "MORGAN STANLEY": "MS",
+            "MORGAN STANLEY & CO": "MS",
+            "MS": "MS",
+            
             # Regional Banks (Tier 2)
             "ZIONS BANCORPORATION": "ZION",
             "ZIONS BANK": "ZION",

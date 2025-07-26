@@ -221,7 +221,7 @@ class EnhancedGraphSchemaManager:
 
     @staticmethod
     def _create_financial_entities_tx(tx, section_data, extracted_entities):
-        section_filename = section_data['section_filename']
+        chunk_id = section_data['chunk_id']
         
         # Create entities for each category
         for category, entities in extracted_entities.items():
@@ -233,62 +233,67 @@ class EnhancedGraphSchemaManager:
                 # Create the appropriate entity node based on category
                 if category == 'products':
                     query = """
-                    MATCH (s:Section {filename: $section_filename})
-                    MERGE (p:Product {name: $entity_name})
+                    MATCH (c:Chunk {chunk_id: $chunk_id})
+                    MERGE (p:Product {name: $entity_type})
                     ON CREATE SET
-                        p.type = $entity_type,
                         p.category = $category,
                         p.description = $context
-                    MERGE (s)-[:MENTIONS_PRODUCT]->(p)
+                    ON MATCH SET
+                        p.matched_text = coalesce(p.matched_text, []) + [$entity_text]
+                    MERGE (c)-[:MENTIONS_PRODUCT]->(p)
                     """
                 elif category == 'risks':
                     query = """
-                    MATCH (s:Section {filename: $section_filename})
-                    MERGE (r:RiskFactor {name: $entity_name})
+                    MATCH (c:Chunk {chunk_id: $chunk_id})
+                    MERGE (r:RiskFactor {name: $entity_type})
                     ON CREATE SET
-                        r.type = $entity_type,
                         r.category = $category,
                         r.description = $context,
                         r.severity = 'medium'
-                    MERGE (s)-[:IDENTIFIES_RISK]->(r)
+                    ON MATCH SET
+                        r.matched_text = coalesce(r.matched_text, []) + [$entity_text]
+                    MERGE (c)-[:IDENTIFIES_RISK]->(r)
                     """
                 elif category == 'metrics':
                     query = """
-                    MATCH (s:Section {filename: $section_filename})
-                    MERGE (m:Metric {name: $entity_name})
+                    MATCH (c:Chunk {chunk_id: $chunk_id})
+                    MERGE (m:Metric {name: $entity_type})
                     ON CREATE SET
-                        m.type = $entity_type,
                         m.category = $category,
                         m.description = $context
-                    MERGE (s)-[:REPORTS_METRIC]->(m)
+                    ON MATCH SET
+                        m.matched_text = coalesce(m.matched_text, []) + [$entity_text]
+                    MERGE (c)-[:REPORTS_METRIC]->(m)
                     """
                 elif category == 'business_lines':
                     query = """
-                    MATCH (s:Section {filename: $section_filename})
-                    MERGE (bl:BusinessLine {name: $entity_name})
+                    MATCH (c:Chunk {chunk_id: $chunk_id})
+                    MERGE (bl:BusinessLine {name: $entity_type})
                     ON CREATE SET
-                        bl.type = $entity_type,
                         bl.category = $category,
                         bl.description = $context
-                    MERGE (s)-[:DESCRIBES_BUSINESS_LINE]->(bl)
+                    ON MATCH SET
+                        bl.matched_text = coalesce(bl.matched_text, []) + [$entity_text]
+                    MERGE (c)-[:DESCRIBES_BUSINESS_LINE]->(bl)
                     """
                 elif category == 'regulations':
                     query = """
-                    MATCH (s:Section {filename: $section_filename})
-                    MERGE (reg:Regulation {name: $entity_name})
+                    MATCH (c:Chunk {chunk_id: $chunk_id})
+                    MERGE (reg:Regulation {name: $entity_type})
                     ON CREATE SET
-                        reg.type = $entity_type,
                         reg.category = $category,
                         reg.description = $context
-                    MERGE (s)-[:REFERENCES_REGULATION]->(reg)
+                    ON MATCH SET
+                        reg.matched_text = coalesce(reg.matched_text, []) + [$entity_text]
+                    MERGE (c)-[:REFERENCES_REGULATION]->(reg)
                     """
                 else:
                     continue  # Skip unknown categories
                 
                 tx.run(query, 
-                      section_filename=section_filename,
-                      entity_name=entity_text,
+                      chunk_id=chunk_id,
                       entity_type=entity_type,
+                      entity_text=entity_text,
                       category=category,
                       context=context)
 
@@ -394,10 +399,10 @@ class EnhancedGraphSchemaManager:
     def _create_risk_correlations_tx(tx):
         # Find risks mentioned together in the same sections
         query = """
-        MATCH (s:Section)-[:IDENTIFIES_RISK]->(r1:RiskFactor)
-        MATCH (s)-[:IDENTIFIES_RISK]->(r2:RiskFactor)
+        MATCH (c:Chunk)-[:IDENTIFIES_RISK]->(r1:RiskFactor)
+        MATCH (c)-[:IDENTIFIES_RISK]->(r2:RiskFactor)
         WHERE r1 <> r2
-        WITH r1, r2, count(s) as co_occurrence_count
+        WITH r1, r2, count(c) as co_occurrence_count
         WHERE co_occurrence_count >= 2
         MERGE (r1)-[:CORRELATED_WITH {strength: co_occurrence_count}]->(r2)
         """

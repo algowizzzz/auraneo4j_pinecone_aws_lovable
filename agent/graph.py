@@ -74,7 +74,7 @@ def build_graph():
     g.add_conditional_edges(
         "validator",
         route_decider,
-        ["synthesizer", "cypher", "hybrid", "rag", "__end__"],
+        ["synthesizer", "cypher", "hybrid", "rag", "parallel_runner", "__end__"],
     )
     
     # Single-topic synthesis goes to end
@@ -125,7 +125,7 @@ def build_single_topic_graph():
     g.add_conditional_edges(
         "validator",
         route_decider,
-        ["synthesizer", "cypher", "hybrid", "rag", "__end__"],
+        ["synthesizer", "cypher", "hybrid", "rag", "parallel_runner", "__end__"],
     )
     
     g.add_edge("synthesizer", END)
